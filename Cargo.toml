@@ -1,0 +1,19 @@
+[workspace]
+members = ["crates/libesxi2pve", "crates/esxi2pve"]
+default-members = ["crates/esxi2pve"]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.2"
+edition = "2024"
+rust-version = "1.89"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/oktay454/esxi2pve"
+
+[workspace.dependencies]
+libesxi2pve = { version = "0.1.2", path = "crates/libesxi2pve" }
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true

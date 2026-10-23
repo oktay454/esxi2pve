@@ -1,0 +1,15 @@
+[package]
+name = "esxi2pve"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "A command-line tool for verified VMware ESXi to Proxmox VE migrations"
+readme = "README.md"
+keywords = ["esxi", "proxmox", "migration", "vmware", "vmdk"]
+categories = ["command-line-utilities", "virtualization"]
+include = ["src/**", "tests/**", "README.md", "README.tr.md", "LICENSE", "Cargo.toml", "locales/**"]
+
+[dependencies]
+libesxi2pve.workspace = true

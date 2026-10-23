@@ -1,0 +1,49 @@
+esxi2pve — ESXi → Proxmox VE aktarımı
+
+Kullanım:
+  esxi2pve plan    --method YÖNTEM --esxi HOST --esxi-vmid ID --vmid ID --storage AD
+  esxi2pve migrate --method YÖNTEM --esxi HOST --esxi-vmid ID --vmid ID --storage AD
+  esxi2pve status /var/lib/esxi2pve/İŞ_KİMLİĞİ
+
+Yöntem: offline | live-clone | snapshot-iterative | live-mirror
+(snapshot-delta, snapshot-iterative için takma addır.)
+
+plan: salt okunur keşif ve SSHFS/SFTP bağlantı denetimi yapar; VM değiştirmez.
+migrate: aktarımı uygular. Başlangıç ve geçiş onayı sorar; --yes ile kabul edilir.
+
+  --yes                     Başlangıç/geçiş onaylarını kabul et
+  --start                   Hedefi başlat; sağlık denetimi zorunlu
+  --health-tcp IP:PORT       Rust TCP denetimi (uygulama sağlığı garantisi vermez)
+  --health-timeout SN        Sağlık denetimi zaman aşımı (600)
+  --staging-storage AD      Live Mirror: hedef depodan farklı, yerel dir depolama
+  --bridge AD               PVE köprüsü (vmbr0); bir ağ kartı desteklenir
+  --disk-bus auto|scsi|sata  Denetleyici eşlemesi (auto)
+  --scsihw pvscsi|lsi        Açık SCSI veri yolu seçiminde zorunlu
+  --bios auto|seabios|ovmf   Firmware eşlemesi (auto)
+  --name AD                 Hedef VM adı (esxi-KAYNAK_ID)
+  --ssh-user AD             SSH kullanıcısı (root)
+  --ssh-port PORT           SSH portu (22)
+  --ssh-key DOSYA           Mevcut SSH anahtarı; başarısızsa terminalde parola
+  --known-hosts DOSYA       Önceden doğrulanmış SSH sunucu anahtarları
+  --shutdown-timeout SN     Düzenli kapanış sınırı (600); zorla kapatma yok
+  --command-timeout SN      Harici komut başına zaman sınırı (86400)
+  --iterations SAYI         Snapshot ön tur sınırı (6); 0: ana kopya + son fark
+  --delta-engine qemu|clone qemu: mantıksal fark; clone: tam klon ve hash taraması
+  --convergence-mib SAYI    Snapshot turu yakınsama eşiği (64)
+  --mirror-mib SAYI         Aynalama üst sınırı MiB/s (64)
+  --max-read-latency-ms N   Uzak 4KiB okuma p95 üst sınırı ms (25)
+  --min-read-mib SAYI       Uzak ardışık okuma alt sınırı MiB/s (20)
+  --log-root DİZİN          /var/log/esxi2pve
+  --state-root DİZİN        /var/lib/esxi2pve
+  --run-root DİZİN          /run/esxi2pve; kısa yerel yol kullanın
+  --help                    Yardım
+  --version                 Sürüm
+
+Hedef PVE üzerinde root gerekir. Kaynak silinmez veya otomatik geri açılmaz.
+Live Mirror --start, --health-tcp ve --staging-storage gerektirir.
+Eksik paketler listelenir; otomatik kurulum yapılmaz.
+
+Dil seçimi: ESXI2PVE_LANG > LC_ALL > LC_MESSAGES > LANG.
+Örnek: ESXI2PVE_LANG=tr esxi2pve --help
+       ESXI2PVE_LANG=en esxi2pve --help
+Boş değerler atlanır; tanınmayan diller ve C/POSIX için İngilizce kullanılır.

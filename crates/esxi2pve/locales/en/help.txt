@@ -1,0 +1,49 @@
+esxi2pve — ESXi to Proxmox VE migration
+
+Usage:
+  esxi2pve plan    --method METHOD --esxi HOST --esxi-vmid ID --vmid ID --storage NAME
+  esxi2pve migrate --method METHOD --esxi HOST --esxi-vmid ID --vmid ID --storage NAME
+  esxi2pve status /var/lib/esxi2pve/JOB_ID
+
+Methods: offline | live-clone | snapshot-iterative | live-mirror
+(snapshot-delta is an alias for snapshot-iterative.)
+
+plan: read-only inspection and SSHFS/SFTP connection check; does not modify VMs.
+migrate: perform migration. Prompts at startup and cutover; --yes accepts both.
+
+  --yes                     Accept startup and cutover confirmations
+  --start                   Start the target; requires a health check
+  --health-tcp IP:PORT       Rust TCP check (does not prove application health)
+  --health-timeout SEC       Health check timeout (600)
+  --staging-storage NAME    Live Mirror: local dir storage, different from target
+  --bridge NAME             PVE bridge (vmbr0); one NIC is supported
+  --disk-bus auto|scsi|sata  Controller mapping (auto)
+  --scsihw pvscsi|lsi        Required when explicitly selecting the SCSI bus
+  --bios auto|seabios|ovmf   Firmware mapping (auto)
+  --name NAME               Target VM name (esxi-SOURCE_ID)
+  --ssh-user NAME           SSH user (root)
+  --ssh-port PORT           SSH port (22)
+  --ssh-key FILE            Existing SSH key; prompts for password on failure
+  --known-hosts FILE        Previously verified SSH host keys
+  --shutdown-timeout SEC    Graceful shutdown timeout (600); no forced power-off
+  --command-timeout SEC     Timeout per external command (86400)
+  --iterations COUNT        Snapshot precopy iterations (6); 0: base + final delta
+  --delta-engine qemu|clone qemu: logical deltas; clone: full clone and hash scan
+  --convergence-mib COUNT   Snapshot iteration convergence threshold (64)
+  --mirror-mib COUNT        Mirror bandwidth limit in MiB/s (64)
+  --max-read-latency-ms N   Remote random 4KiB read p95 limit in ms (25)
+  --min-read-mib COUNT       Remote sequential read minimum in MiB/s (20)
+  --log-root DIRECTORY      /var/log/esxi2pve
+  --state-root DIRECTORY    /var/lib/esxi2pve
+  --run-root DIRECTORY      /run/esxi2pve; use a short local path
+  --help                    Show this help
+  --version                 Show version
+
+Run as root on the target PVE node. The source is not deleted or restarted.
+Live Mirror requires --start, --health-tcp and --staging-storage.
+Missing packages are listed; they are not installed automatically.
+
+Language: ESXI2PVE_LANG > LC_ALL > LC_MESSAGES > LANG.
+Examples: ESXI2PVE_LANG=tr esxi2pve --help
+          ESXI2PVE_LANG=en esxi2pve --help
+Empty values are skipped; unsupported languages and C/POSIX fall back to English.

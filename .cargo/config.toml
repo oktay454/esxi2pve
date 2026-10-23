@@ -1,0 +1,3 @@
+# Debian/PVE amd64: standart C çalışma zamanını da sabit bağla.
+[target.x86_64-unknown-linux-gnu]
+rustflags = ["-C", "target-feature=+crt-static"]

@@ -1,0 +1,15 @@
+[package]
+name = "libesxi2pve"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "A Rust library for verified VMware ESXi to Proxmox VE migrations"
+readme = "README.md"
+keywords = ["esxi", "proxmox", "migration", "vmware", "vmdk"]
+categories = ["virtualization", "filesystem"]
+include = ["src/**", "tests/**", "README.md", "README.tr.md", "LICENSE", "Cargo.toml"]
+
+[lib]
+path = "src/lib.rs"
