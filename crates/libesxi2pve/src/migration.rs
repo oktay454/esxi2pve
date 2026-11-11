@@ -133,19 +133,17 @@ impl<E: CommandExecutor> Engine<E> {
 			.duration_since(UNIX_EPOCH)
 			.unwrap_or_default()
 			.as_nanos();
-		let job = format!(
-			"{}-{}-{}-{:x}",
-			process::epoch(),
+		let base = crate::presentation::job_name(
+			(nanos / 1_000_000_000) as u64,
+			nanos,
+			cfg.esxi_vmid,
 			cfg.vmid,
 			std::process::id(),
-			nanos
 		);
 		process::private_dir(&cfg.log_root)?;
 		process::private_dir(&cfg.state_root)?;
 		process::private_dir(&cfg.run_root)?;
-		let dir = cfg.state_root.join(&job);
-		ensure(!dir.exists(), tr!("İş dizini zaten var"))?;
-		process::private_dir(&dir)?;
+		let (job, dir) = process::allocate_job_dir(&cfg.state_root, &cfg.log_root, &base)?;
 		// Unix socket yolu 108 bayttan kısa kalır; kalıcı iş adı bundan bağımsızdır.
 		let run = cfg
 			.run_root
@@ -157,7 +155,11 @@ impl<E: CommandExecutor> Engine<E> {
 		)?;
 		let mount = run.join("esxi");
 		let log_file = cfg.log_root.join(format!("{job}.jsonl"));
-		let journal = Journal::new(executor, dir, &log_file, cfg.command_timeout)?;
+		let mut journal = Journal::new(executor, dir, &log_file, cfg.command_timeout)?;
+		journal.console.verbose = cfg.verbose;
+		journal
+			.console
+			.location(process::epoch(), &journal.dir, &log_file);
 		let mut e = Self {
 			cfg,
 			journal,
@@ -208,6 +210,10 @@ impl<E: CommandExecutor> Engine<E> {
 		let state = json::object([
 			("job", json::text(&self.job)),
 			("method", json::text(self.cfg.method.name())),
+			(
+				"verification",
+				json::text(self.cfg.transfer.verification.name()),
+			),
 			("language", json::text(self.cfg.language.code())),
 			("phase", json::text(&self.journal.phase)),
 			("esxi", json::text(&self.cfg.esxi)),
@@ -851,6 +857,7 @@ impl<E: CommandExecutor> Engine<E> {
 	fn prepare_raw(&mut self) -> Result<()> {
 		for i in 0..self.sizes.len() {
 			let t = self.allocate(i, false)?;
+			crate::transfer::probe_target(&t.path, self.sizes[i], self.cfg.transfer.verification)?;
 			self.targets.push(t);
 		}
 		Ok(())
@@ -913,8 +920,9 @@ impl<E: CommandExecutor> Engine<E> {
 		let hashes = disk::checksums_with_progress(&path, size, BLOCK, |block, hash| {
 			writeln!(stream, "{block} {hash}")?;
 			stream.sync_data()?;
-			self.journal.log(
-				"PROGRESS",
+			self.journal.progress(
+				block + 1,
+				size.div_ceil(BLOCK),
 				&tr!(
 					"Disk {i}: SHA-256 blok {}/{}",
 					block + 1,
@@ -1049,6 +1057,77 @@ impl<E: CommandExecutor> Engine<E> {
 		self.nbds[index].stopped = true;
 		Ok(())
 	}
+	fn apply_ranges(
+		&mut self,
+		i: usize,
+		path: &Path,
+		label: &str,
+		ranges: &[disk::Range],
+		verified: &Path,
+	) -> Result<()> {
+		let fingerprint = vmware::chain_fingerprint(path, &self.mount)?;
+		let n = self.start_nbd(i, path, label)?;
+		let options = self.cfg.transfer.clone();
+		if options.verification == crate::transfer::Verification::Buffered {
+			self.journal.log(
+				"WARN",
+				&tr!(
+					"Önbellekli geri okuma açıkça seçildi; doğrulama sayfa önbelleğinden karşılanabilir"
+				),
+			)?;
+		}
+		let socket = self.nbds[n].socket.clone();
+		let target = self.targets[i].path.clone();
+		let mut last_retries = 0;
+		let report = crate::transfer::copy(
+			&socket,
+			&target,
+			ranges,
+			self.sizes[i],
+			verified,
+			&options,
+			|progress| {
+				if progress.retries > last_retries {
+					last_retries = progress.retries;
+					self.journal.log(
+						"WARN",
+						&tr!(
+							"Disk {i}: doğrulama tekrarı sayısı {count}",
+							i = i,
+							count = last_retries
+						),
+					)?;
+				}
+				let rate = progress.verified_bytes as f64
+					/ 1048576.0 / progress.elapsed_seconds.max(0.001);
+				self.journal.progress(
+					progress.verified_bytes,
+					progress.planned_bytes,
+					&tr!(
+						"Disk {i}: doğrulanan {done}/{total} MiB; hız {rate:.2} MiB/sn; okuma derinliği {depth}",
+						i = i,
+						done = progress.verified_bytes / 1048576,
+						total = progress.planned_bytes.div_ceil(1048576),
+						rate = rate,
+						depth = progress.queue_depth
+					),
+				)
+			},
+		)?;
+		ensure(
+			fingerprint == vmware::chain_fingerprint(path, &self.mount)?,
+			tr!("Aktarım sırasında kaynak descriptor zinciri değişti"),
+		)?;
+		self.journal.log("INFO", &tr!("Disk {i}: G/Ç tamamlandı; okuma={read:.2} sn özet={hash:.2} sn yazma={write:.2} sn fsync={sync:.2} sn doğrulama={verify:.2} sn tekrar={retries}",
+			i = i, read = report.read_ms/1000.0, hash = report.hash_ms/1000.0,
+			write = report.write_ms/1000.0, sync = report.fsync_ms/1000.0,
+			verify = report.verify_ms/1000.0, retries = report.retries))?;
+		self.journal.resource(
+			"transfer-metrics",
+			&[&verified.with_extension("metrics.jsonl").to_string_lossy()],
+		)?;
+		self.stop_nbd(n)
+	}
 	fn replay_clone(&mut self, i: usize, clone: &str, label: &str) -> Result<u64> {
 		let path = self.local(clone)?;
 		let descriptor = self.validate(&path)?;
@@ -1101,15 +1180,13 @@ impl<E: CommandExecutor> Engine<E> {
 		let ranges_file = self.journal.dir.join(format!("{label}-ranges-{i}.json"));
 		process::write_private(&ranges_file, disk::encode_ranges(&ranges))?;
 		if !ranges.is_empty() {
-			let n = self.start_nbd(i, &path, label)?;
-			disk::logical_copy(
-				&self.nbds[n].socket,
-				&self.targets[i].path,
+			self.apply_ranges(
+				i,
+				&path,
+				label,
 				&ranges,
-				self.sizes[i],
 				&ranges_file.with_extension("verified.jsonl"),
 			)?;
-			self.stop_nbd(n)?;
 		}
 		let actual = self.hash_target(i)?;
 		ensure(
@@ -1151,15 +1228,13 @@ impl<E: CommandExecutor> Engine<E> {
 			),
 		)?;
 		if !ranges.is_empty() {
-			let n = self.start_nbd(i, &path, label)?;
-			disk::logical_copy(
-				&self.nbds[n].socket,
-				&self.targets[i].path,
+			self.apply_ranges(
+				i,
+				&path,
+				label,
 				&ranges,
-				self.sizes[i],
 				&file.with_extension("verified.jsonl"),
 			)?;
-			self.stop_nbd(n)?;
 		}
 		self.applied[i] = source.into();
 		self.journal

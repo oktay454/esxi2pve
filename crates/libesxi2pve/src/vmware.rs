@@ -605,3 +605,27 @@ mod rdm_tests {
 		assert!(super::parse_descriptor("RW 16 VMFSRDM \"mapping.vmdk\"\n").is_err());
 	}
 }
+
+/// Zincir neslini transfer öncesi/sonrası karşılaştırmak için descriptor özeti.
+pub fn chain_fingerprint(path: &Path, mount: &Path) -> Result<String> {
+	validate_descriptor(path, mount, 0)?;
+	let mut digest = crate::sha256::Sha256::new();
+	let mut path = path.to_path_buf();
+	for _ in 0..20 {
+		let content = std::fs::read(&path)?;
+		digest.update(&(content.len() as u64).to_be_bytes());
+		digest.update(&content);
+		let text = std::str::from_utf8(&content)
+			.map_err(|_| crate::Error(tr!("Descriptor UTF-8 değil")))?;
+		let descriptor = parse_descriptor(text)?;
+		if let Some(parent) = descriptor.parent {
+			path = path
+				.parent()
+				.ok_or_else(|| crate::Error(tr!("Disk üst dizini yok")))?
+				.join(parent);
+		} else {
+			return Ok(digest.hex());
+		}
+	}
+	Err(crate::Error(tr!("Descriptor zinciri çok uzun")))
+}

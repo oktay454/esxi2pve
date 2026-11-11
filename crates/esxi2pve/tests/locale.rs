@@ -112,3 +112,100 @@ fn version_is_language_independent() {
 		format!("esxi2pve {}\n", env!("CARGO_PKG_VERSION"))
 	);
 }
+
+#[test]
+fn turkey_test_preserves_dotted_and_dotless_i_in_cli_errors() {
+	for locale in ["C", "en_US.UTF-8", "tr_TR.UTF-8"] {
+		for value in [
+			"i",
+			"İ",
+			"ı",
+			"I",
+			"I\u{307}",
+			"İstanbul",
+			"Isparta",
+			"ışık",
+		] {
+			let option = format!("--{value}");
+			let output = run(&[("LC_ALL", locale), ("LANG", locale)], &["plan", &option]);
+			assert!(!output.status.success(), "{locale}: {option}");
+			let stderr = String::from_utf8(output.stderr).unwrap();
+			assert!(stderr.contains(&option), "{locale}: {stderr}");
+		}
+	}
+}
+#[test]
+fn turkey_test_ascii_options_do_not_follow_turkish_case_mapping() {
+	for locale in ["C", "en_US.UTF-8", "tr_TR.UTF-8"] {
+		let output = run(
+			&[("LC_ALL", locale), ("LANG", locale)],
+			&[
+				"plan",
+				"--method",
+				"snapshot-iterative",
+				"--esxi",
+				"192.0.2.10",
+				"--esxi-vmid",
+				"72",
+				"--vmid",
+				"108281",
+				"--storage",
+				"ISCSI",
+				"--iterations",
+				"0",
+				"--io-max-depth",
+				"0",
+			],
+		);
+		assert!(!output.status.success());
+		let stderr = String::from_utf8(output.stderr).unwrap();
+		assert!(stderr.contains("1..64"), "{locale}: {stderr}");
+		assert!(
+			!stderr.contains("Unknown option") && !stderr.contains("Bilinmeyen seçenek"),
+			"{stderr}"
+		);
+	}
+}
+#[test]
+fn turkey_test_status_preserves_unicode_paths_keys_and_values() {
+	use std::{
+		fs,
+		path::PathBuf,
+		time::{SystemTime, UNIX_EPOCH},
+	};
+	struct Temp(PathBuf);
+	impl Drop for Temp {
+		fn drop(&mut self) {
+			let _ = fs::remove_dir_all(&self.0);
+		}
+	}
+	let root = Temp(
+		PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+			.join("target/turkey-tests")
+			.join(format!(
+				"İş-ışık-iİıI-{}-{}",
+				std::process::id(),
+				SystemTime::now()
+					.duration_since(UNIX_EPOCH)
+					.unwrap()
+					.as_nanos()
+			)),
+	);
+	fs::create_dir_all(&root.0).unwrap();
+	let state = libesxi2pve::json::object([
+		("job", libesxi2pve::json::text("İstanbul-Isparta-ışık-iİıI")),
+		("phase", libesxi2pve::json::text("completed")),
+		("vmid", libesxi2pve::json::number(108281)),
+		("iİıI", libesxi2pve::json::text("I\u{307}")),
+	]);
+	fs::write(root.0.join("state.json"), state.encode()).unwrap();
+	for locale in ["C", "en_US.UTF-8", "tr_TR.UTF-8"] {
+		let output = run(
+			&[("LC_ALL", locale), ("LANG", locale)],
+			&["status", root.0.to_str().unwrap()],
+		);
+		assert!(output.status.success(), "{locale}: {:?}", output.stderr);
+		let text = String::from_utf8(output.stdout).unwrap();
+		assert_eq!(libesxi2pve::json::parse(&text).unwrap(), state);
+	}
+}

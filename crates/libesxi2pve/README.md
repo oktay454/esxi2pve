@@ -26,7 +26,7 @@ Help, errors, confirmations, descriptive logs and recovery notes are translated.
 
 ```toml
 [dependencies]
-libesxi2pve = "0.1.2"
+libesxi2pve = "0.1.4"
 ```
 
 ```rust,no_run
@@ -64,7 +64,7 @@ let migration = Migration::new(config).with_health_check(
 let report = migration.run()?;
 ```
 
-The second snippet is schematic: implement `my_service_is_ready` for your application. The CLI's built-in check uses Rust `TcpStream::connect_timeout`; an open TCP port does not prove database or application health.
+Implement `my_service_is_ready` for your application. The CLI's built-in check uses Rust `TcpStream::connect_timeout`; an open TCP port does not prove database or application health.
 
 ## Modules
 
@@ -76,7 +76,8 @@ The second snippet is schematic: implement `my_service_is_ready` for your applic
 | `transport` | Native SSHFS options and FUSE escaping |
 | `process` | Argument-array command execution, persistent stdout/stderr and timeouts |
 | `vmware` | VMX/VMDK parsing, CID chains and ESXi/PVE metadata |
-| `disk` | Read-only NBD client, logical deltas, QMP and verified readback |
+| `transfer` | Async NBD pipeline, balanced I/O, fsync, direct readback and controlled retries |
+| `disk` | NBD/QMP protocol helpers, logical range validation and copy compatibility entry point |
 | `json` | QEMU/QMP JSON parsing and encoding |
 | `sha256` | Streaming SHA-256 for disk consistency comparison |
 
@@ -95,6 +96,18 @@ Tests use `ssh`, `sshfs`, `qemu-img`, `qemu-nbd`, `qemu-io`, `sha256sum` and Deb
 
 For operational steps, migration methods, static CLI builds and limitations, read the CLI's [English README](https://github.com/oktay454/esxi2pve/blob/main/README.md) or [Turkish README](https://github.com/oktay454/esxi2pve/blob/main/README.tr.md). Validate migration compatibility and application health checks for the specific ESXi/PVE configuration before production use.
 
+Turkey tests cover dotted/dotless I, combining Unicode sequences, JSON/VMX/file paths and ASCII protocol identifiers. CLI checks launch child processes under `C`, `en_US.UTF-8` and `tr_TR.UTF-8` without changing the test process environment. The two real SSHFS parser checks may require access to a FUSE device even though they do not connect to a real server.
+
+## Delta transfer settings
+
+`Config.transfer` holds `TransferOptions`. `max_depth` accepts 1..64 (default 16), `memory_bytes` accepts 16..1024 MiB (default 128 MiB), `verification` defaults to `Verification::Direct` and `read_timeout` defaults to 120 seconds. `transfer::copy` applies disjoint ranges from a frozen source and returns `TransferReport`; `disk::logical_copy` is a compatibility entry point using defaults. The caller must ensure a frozen source generation and exclusive target-writer ownership.
+
+Workflow and record guarantees: [Transfer engine](https://github.com/oktay454/esxi2pve/blob/main/docs/architecture.md).
+
 ## License
 
 GNU GPL version 3 or later (`GPL-3.0-or-later`). See [LICENSE](LICENSE).
+
+## Terminal presentation
+
+Config.verbose enables full terminal command details; persistent logs remain complete regardless of this setting. The presentation module formats localized phases and human-readable status summaries. Every job ID uses the same format: UTC timestamp with nine-digit nanoseconds, source/target VMIDs and PID. Presentation does not change migration, snapshot retention or verification policies.

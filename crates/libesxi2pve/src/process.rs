@@ -16,6 +16,21 @@ pub fn epoch() -> u64 {
 		.unwrap_or_default()
 		.as_secs()
 }
+/// Tek kimlik biçimi: mevcut iş veya günlükle çakışma halinde üzerine yazılmaz.
+pub(crate) fn allocate_job_dir(
+	state_root: &Path,
+	log_root: &Path,
+	job: &str,
+) -> Result<(String, PathBuf)> {
+	ensure(
+		!log_root.join(format!("{job}.jsonl")).exists(),
+		tr!("Benzersiz iş dizini oluşturulamadı"),
+	)?;
+	let dir = state_root.join(job);
+	fs::DirBuilder::new().mode(0o700).create(&dir)?;
+	Ok((job.to_string(), dir))
+}
+
 pub fn private_dir(path: &Path) -> Result<()> {
 	let mut b = fs::DirBuilder::new();
 	b.mode(0o700);
@@ -151,6 +166,7 @@ pub(crate) struct Journal<E> {
 	count: u64,
 	pub phase: String,
 	pub timeout: Duration,
+	pub console: crate::presentation::Console,
 }
 impl<E: CommandExecutor> Journal<E> {
 	pub fn new(executor: E, dir: PathBuf, log_path: &Path, timeout: Duration) -> Result<Self> {
@@ -167,11 +183,13 @@ impl<E: CommandExecutor> Journal<E> {
 			count: 0,
 			phase: "initializing".into(),
 			timeout,
+			console: crate::presentation::Console::default(),
 		})
 	}
 	pub fn log(&mut self, level: &str, message: &str) -> Result<()> {
+		let now = epoch();
 		let row = json::object([
-			("epoch", json::number(epoch())),
+			("epoch", json::number(now)),
 			("level", json::text(level)),
 			(
 				"language",
@@ -183,7 +201,13 @@ impl<E: CommandExecutor> Journal<E> {
 		.encode();
 		writeln!(self.log, "{row}")?;
 		self.log.sync_data()?;
-		eprintln!("{} [{level}] [{}] {message}", epoch(), self.phase);
+		self.console.event(now, level, &self.phase, message);
+		Ok(())
+	}
+	pub fn progress(&mut self, current: u64, total: u64, message: &str) -> Result<()> {
+		self.log("PROGRESS", message)?;
+		self.console
+			.progress(epoch(), &self.phase, current, total, message);
 		Ok(())
 	}
 	pub fn run(
@@ -213,6 +237,9 @@ impl<E: CommandExecutor> Journal<E> {
 		self.log("CMD", &format!("{} {argv}", base.display()))?;
 		let out = base.with_extension("stdout");
 		let err = base.with_extension("stderr");
+		self.console
+			.command_start(epoch(), &self.phase, self.count, &spec);
+		let started = Instant::now();
 		let result = self.executor.execute(&spec, &out, &err);
 		match result {
 			Ok(status) => {
@@ -233,6 +260,14 @@ impl<E: CommandExecutor> Journal<E> {
 						err.display()
 					),
 				)?;
+				self.console.command_end(
+					epoch(),
+					&self.phase,
+					self.count,
+					&spec,
+					status.code,
+					started.elapsed(),
+				);
 				if status.code != 0 {
 					let tail = error_tail(&err).unwrap_or_default();
 					let detail = if tail.is_empty() {
@@ -257,8 +292,9 @@ impl<E: CommandExecutor> Journal<E> {
 		}
 	}
 	pub fn resource(&mut self, kind: &str, values: &[&str]) -> Result<()> {
+		let now = epoch();
 		let row = json::object([
-			("epoch", json::number(epoch())),
+			("epoch", json::number(now)),
 			("kind", json::text(kind)),
 			(
 				"values",
@@ -413,5 +449,96 @@ mod stderr_tests {
 		assert!(tail.contains("line 12") && tail.contains("line 19"));
 		assert!(tail.len() < 8192);
 		std::fs::remove_dir_all(root).unwrap();
+	}
+}
+
+#[cfg(test)]
+mod presentation_tests {
+	use super::*;
+	fn temp() -> PathBuf {
+		let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+			.join("target/presentation-tests")
+			.join(format!(
+				"{}-{}",
+				std::process::id(),
+				SystemTime::now()
+					.duration_since(UNIX_EPOCH)
+					.unwrap()
+					.as_nanos()
+			));
+		private_dir(&path).unwrap();
+		path
+	}
+	#[test]
+	fn fixed_job_allocation_is_exclusive_and_never_changes_naming_format() {
+		let root = temp();
+		let state = root.join("state");
+		let logs = root.join("log");
+		private_dir(&state).unwrap();
+		private_dir(&logs).unwrap();
+		let job = "2026-10-24T103000.123456789Z_esxi-72_pve-108281_p42";
+		let threads: Vec<_> = (0..8)
+			.map(|_| {
+				let state = state.clone();
+				let logs = logs.clone();
+				std::thread::spawn(move || allocate_job_dir(&state, &logs, job))
+			})
+			.collect();
+		let results: Vec<_> = threads.into_iter().map(|t| t.join().unwrap()).collect();
+		assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+		assert_eq!(fs::read_dir(&state).unwrap().count(), 1);
+		write_private(&state.join(job).join("keep"), "unchanged").unwrap();
+		assert!(allocate_job_dir(&state, &logs, job).is_err());
+		assert_eq!(
+			read_text(&state.join(job).join("keep")).unwrap(),
+			"unchanged"
+		);
+		let log_only = "2026-10-24T103001.123456789Z_esxi-72_pve-108281_p42";
+		write_private(&logs.join(format!("{log_only}.jsonl")), "old log").unwrap();
+		assert!(allocate_job_dir(&state, &logs, log_only).is_err());
+		fs::remove_dir_all(root).unwrap();
+	}
+
+	#[test]
+	fn console_throttling_and_verbose_mode_preserve_every_json_progress_record() {
+		let root = temp();
+		let mut journal = Journal::new(
+			ProcessExecutor,
+			root.join("state"),
+			&root.join("events.jsonl"),
+			Duration::from_secs(1),
+		)
+		.unwrap();
+		journal.phase = "online_precopy".into();
+		for block in 1..=5 {
+			journal.console.verbose = block > 3;
+			journal
+				.progress(block, 5, &format!("record-{block}"))
+				.unwrap();
+		}
+		let rows = read_text(&root.join("events.jsonl")).unwrap();
+		let rows: Vec<_> = rows
+			.lines()
+			.map(|line| json::parse(line).unwrap())
+			.collect();
+		assert_eq!(rows.len(), 5);
+		for (index, row) in rows.iter().enumerate() {
+			let json::Value::Object(fields) = row else {
+				panic!("object expected")
+			};
+			assert_eq!(fields.len(), 5);
+			assert_eq!(row.get("level").unwrap().string().unwrap(), "PROGRESS");
+			assert_eq!(
+				row.get("phase").unwrap().string().unwrap(),
+				"online_precopy"
+			);
+			assert_eq!(
+				row.get("message").unwrap().string().unwrap(),
+				format!("record-{}", index + 1)
+			);
+			assert!(row.get("epoch").unwrap().integer().unwrap() > 0);
+		}
+		drop(journal);
+		fs::remove_dir_all(root).unwrap();
 	}
 }

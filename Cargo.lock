@@ -4,11 +4,11 @@ version = 4
 
 [[package]]
 name = "esxi2pve"
-version = "0.1.2"
+version = "0.1.4"
 dependencies = [
  "libesxi2pve",
 ]
 
 [[package]]
 name = "libesxi2pve"
-version = "0.1.2"
+version = "0.1.4"

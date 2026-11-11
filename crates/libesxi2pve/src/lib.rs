@@ -8,8 +8,10 @@ pub mod config;
 pub mod disk;
 pub mod json;
 pub mod migration;
+pub mod presentation;
 pub mod process;
 pub mod sha256;
+pub mod transfer;
 mod transport;
 pub mod vmware;
 

@@ -210,21 +210,30 @@ mod tests {
 mod openssh_tests {
 	#[test]
 	fn quoted_file_paths_are_accepted_by_real_openssh_without_network() {
-		let path = "/tmp/key files/id_rsa";
-		let option = format!("IdentityFile={}", super::ssh_config_path(path).unwrap());
-		let output = std::process::Command::new("ssh")
-			.args(["-F", "/dev/null", "-G", "-o", &option, "fake.invalid"])
-			.output()
-			.expect("openssh-client gerekli; paket kurulmadı");
-		assert!(
-			output.status.success(),
-			"{}",
-			String::from_utf8_lossy(&output.stderr)
-		);
-		assert!(
-			String::from_utf8_lossy(&output.stdout)
-				.lines()
-				.any(|line| line == format!("identityfile {path}"))
-		);
+		for locale in ["C", "en_US.UTF-8", "tr_TR.UTF-8"] {
+			for path in [
+				"/tmp/key files/id_rsa",
+				"/tmp/İstanbul Isparta ışık iİıI/id_rsa",
+			] {
+				let option = format!("IdentityFile={}", super::ssh_config_path(path).unwrap());
+				let output = std::process::Command::new("ssh")
+					.args(["-F", "/dev/null", "-G", "-o", &option, "fake.invalid"])
+					.env("LC_ALL", locale)
+					.output()
+					.expect("openssh-client gerekli; paket kurulmadı");
+				assert!(
+					output.status.success(),
+					"{}",
+					String::from_utf8_lossy(&output.stderr)
+				);
+				assert!(
+					String::from_utf8(output.stdout)
+						.unwrap()
+						.lines()
+						.any(|line| line == format!("identityfile {path}")),
+					"{locale}: {path}"
+				);
+			}
+		}
 	}
 }

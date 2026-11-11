@@ -2,7 +2,13 @@
 use libesxi2pve::tr;
 use libesxi2pve::{Config, DeltaEngine, Error, HealthCheck, Method, Migration, Result, json};
 use std::{
-	collections::BTreeSet, env, net::SocketAddr, path::PathBuf, process::ExitCode, time::Duration,
+	collections::BTreeSet,
+	env,
+	io::{self, IsTerminal},
+	net::SocketAddr,
+	path::PathBuf,
+	process::ExitCode,
+	time::Duration,
 };
 fn help() -> &'static str {
 	match libesxi2pve::i18n::current_language() {
@@ -39,6 +45,7 @@ fn parse(args: &[String]) -> Result<Config> {
 		}
 		match opt.as_str() {
 			"--yes" => cfg.yes = true,
+			"--verbose" => cfg.verbose = true,
 			"--start" => cfg.start = true,
 			"--method" | "--mode" => {
 				cfg.method = Method::parse(&value(args, &mut i)?)?;
@@ -69,6 +76,20 @@ fn parse(args: &[String]) -> Result<Config> {
 			}
 			"--command-timeout" => {
 				cfg.command_timeout = Duration::from_secs(numeric(value(args, &mut i)?, opt)?)
+			}
+			"--io-max-depth" => cfg.transfer.max_depth = numeric(value(args, &mut i)?, opt)?,
+			"--io-memory-mib" => {
+				let mib: usize = numeric(value(args, &mut i)?, opt)?;
+				cfg.transfer.memory_bytes = mib
+					.checked_mul(1024 * 1024)
+					.ok_or_else(|| Error(tr!("G/Ç bellek değeri taştı")))?;
+			}
+			"--verify-read" => {
+				cfg.transfer.verification = match value(args, &mut i)?.as_str() {
+					"direct" => libesxi2pve::transfer::Verification::Direct,
+					"buffered" => libesxi2pve::transfer::Verification::Buffered,
+					_ => return Err(Error(tr!("--verify-read direct|buffered olmalı"))),
+				};
 			}
 			"--iterations" => cfg.iterations = numeric(value(args, &mut i)?, opt)?,
 			"--convergence-mib" => cfg.convergence_mib = numeric(value(args, &mut i)?, opt)?,
@@ -111,7 +132,7 @@ fn parse(args: &[String]) -> Result<Config> {
 	Ok(cfg)
 }
 fn main_result() -> Result<()> {
-	let args: Vec<_> = env::args().skip(1).collect();
+	let mut args: Vec<_> = env::args().skip(1).collect();
 	if args.is_empty() || args.iter().any(|s| s == "--help" || s == "-h") {
 		print!("{}", help());
 		return Ok(());
@@ -120,6 +141,15 @@ fn main_result() -> Result<()> {
 		println!("esxi2pve {}", env!("CARGO_PKG_VERSION"));
 		return Ok(());
 	}
+	let json_count = args.iter().filter(|arg| arg.as_str() == "--json").count();
+	if json_count > 1 {
+		return Err(Error(tr!("Yinelenen seçenek: {opt}", opt = "--json")));
+	}
+	let json_output = json_count == 1 || !io::stdout().is_terminal();
+	args.retain(|arg| arg != "--json");
+	if args.is_empty() {
+		return Err(Error(tr!("Komut: plan | migrate | status")));
+	}
 	if args[0] == "status" {
 		if args.len() != 2 {
 			return Err(Error(tr!("status için bir iş dizini gerekli")));
@@ -127,31 +157,35 @@ fn main_result() -> Result<()> {
 		let path = PathBuf::from(&args[1]).join("state.json");
 		let data = std::fs::read_to_string(path)?;
 		let state = json::parse(&data)?;
-		println!("{}", state.encode());
+		print_result(&state, json_output);
 		return Ok(());
 	}
 	if !matches!(args[0].as_str(), "plan" | "migrate") {
 		return Err(Error(tr!("Komut: plan | migrate | status")));
 	}
 	let report = Migration::new(parse(&args)?).run()?;
-	println!(
-		"{}",
-		json::object([
-			("job", json::text(report.job)),
-			("phase", json::text(report.phase)),
-			("state_dir", json::text(report.state_dir.to_string_lossy())),
-			("log_file", json::text(report.log_file.to_string_lossy())),
-			(
-				"downtime_seconds",
-				report
-					.downtime_seconds
-					.map(json::number)
-					.unwrap_or(json::Value::Null)
-			)
-		])
-		.encode()
-	);
+	let result = json::object([
+		("job", json::text(report.job)),
+		("phase", json::text(report.phase)),
+		("state_dir", json::text(report.state_dir.to_string_lossy())),
+		("log_file", json::text(report.log_file.to_string_lossy())),
+		(
+			"downtime_seconds",
+			report
+				.downtime_seconds
+				.map(json::number)
+				.unwrap_or(json::Value::Null),
+		),
+	]);
+	print_result(&result, json_output);
 	Ok(())
+}
+fn print_result(value: &json::Value, json_output: bool) {
+	if json_output {
+		println!("{}", value.encode());
+	} else {
+		println!("{}", libesxi2pve::presentation::status_summary(value));
+	}
 }
 fn main() -> ExitCode {
 	match main_result() {
@@ -188,6 +222,34 @@ mod tests {
 			assert!(parse(&args(s)).is_err(), "{s}");
 		}
 	}
+
+	#[test]
+	fn transfer_limits_and_verification_are_validated() {
+		let cfg = parse(&args(
+			"--io-max-depth 8 --io-memory-mib 64 --verify-read buffered",
+		))
+		.unwrap();
+		assert_eq!(cfg.transfer.max_depth, 8);
+		assert_eq!(cfg.transfer.memory_bytes, 64 * 1024 * 1024);
+		assert_eq!(
+			cfg.transfer.verification,
+			libesxi2pve::transfer::Verification::Buffered
+		);
+		assert_eq!(
+			parse(&args("")).unwrap().transfer.verification,
+			libesxi2pve::transfer::Verification::Direct
+		);
+		for invalid in [
+			"--io-max-depth 0",
+			"--io-max-depth 65",
+			"--io-memory-mib 15",
+			"--io-memory-mib 1025",
+			"--io-memory-mib 18446744073709551615",
+			"--verify-read automatic",
+		] {
+			assert!(parse(&args(invalid)).is_err(), "{invalid}");
+		}
+	}
 	#[test]
 	fn method_required() {
 		assert!(parse(&["migrate".into()]).is_err());
@@ -197,5 +259,36 @@ mod tests {
 		let mut a = args("--start --health-tcp 192.0.2.30:443 --staging-storage local");
 		a[2] = "live-mirror".into();
 		assert!(parse(&a).is_ok());
+	}
+}
+
+#[cfg(test)]
+mod presentation_tests {
+	use super::*;
+	#[test]
+	fn verbose_is_explicit_and_does_not_change_migration_options() {
+		let args = [
+			"plan",
+			"--method",
+			"offline",
+			"--esxi",
+			"192.0.2.10",
+			"--esxi-vmid",
+			"4",
+			"--vmid",
+			"104",
+			"--storage",
+			"local-lvm",
+		];
+		let plain: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+		let mut detailed = plain.clone();
+		detailed.push("--verbose".into());
+		let plain = parse(&plain).unwrap();
+		let detailed = parse(&detailed).unwrap();
+		assert!(!plain.verbose);
+		assert!(detailed.verbose);
+		assert_eq!(plain.method, detailed.method);
+		assert_eq!(plain.vmid, detailed.vmid);
+		assert_eq!(plain.execute, detailed.execute);
 	}
 }

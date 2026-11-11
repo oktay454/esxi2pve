@@ -41,6 +41,9 @@ pub struct HealthCheck {
 }
 #[derive(Clone, Debug)]
 pub struct Config {
+	pub transfer: crate::transfer::TransferOptions,
+	/// Terminalde komutların tam ayrıntılarını gösterir; kalıcı kayıtları etkilemez.
+	pub verbose: bool,
 	pub language: crate::i18n::Language,
 	pub method: Method,
 	pub esxi: String,
@@ -76,7 +79,9 @@ pub struct Config {
 impl Default for Config {
 	fn default() -> Self {
 		Self {
+			transfer: crate::transfer::TransferOptions::default(),
 			language: crate::i18n::current_language(),
+			verbose: false,
 			method: Method::SnapshotIterative,
 			esxi: String::new(),
 			esxi_vmid: 0,
@@ -123,6 +128,7 @@ impl Config {
 		crate::i18n::with_language(self.language, || self.validate_inner())
 	}
 	fn validate_inner(&self) -> Result<()> {
+		self.transfer.validate()?;
 		ensure(
 			!self.esxi.is_empty()
 				&& self.esxi.len() <= 253

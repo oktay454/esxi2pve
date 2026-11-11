@@ -36,6 +36,24 @@ Logs are stored under `/var/log/esxi2pve` and job state under `/var/lib/esxi2pve
 
 See the [full operational guide](https://github.com/oktay454/esxi2pve/blob/main/README.md) for compatibility limits, storage requirements, static builds and recovery procedures.
 
+Delta transfers use bounded adaptive asynchronous NBD reads and durable SHA-256 verification. Limits: `--io-max-depth 1..64` and `--io-memory-mib 16..1024`, defaulting to 16 and 128 MiB. Direct readback is the default; explicit `--verify-read buffered` records a warning. [Transfer engine](https://github.com/oktay454/esxi2pve/blob/main/docs/architecture.md).
+
 ## License
 
 GNU GPL version 3 or later (`GPL-3.0-or-later`). See [LICENSE](LICENSE).
+
+## Job names and terminal output
+
+Job directories use a UTC start time and VM IDs, for example:
+
+```text
+/var/lib/esxi2pve/2026-10-24T103000.123456789Z_esxi-72_pve-108281_p3832933/
+```
+
+The date/time is UTC (Z), followed by the source ESXi VMID and target PVE VMID. Names are independent of the selected language. Nine-digit nanoseconds and the process ID (PID) are always present; the format is fixed. Directories are allocated exclusively; an existing name is an error. Existing jobs are not renamed or overwritten. The event log uses the same job name with a .jsonl suffix. The source host and all job metadata remain available in state.json.
+
+Terminal messages use the PVE node's local time with a UTC offset, localized phase/level labels, concise command descriptions and elapsed command durations. Progress percentages are shown at most once every two seconds, plus the first and last record. --verbose shows full command arguments, command result paths and every progress event.
+
+GNU date from Debian coreutils resolves the system timezone or TZ; the offset is cached for the current minute. If date is unavailable or fails, terminal timestamps explicitly fall back to UTC (Z). Formatting does not invoke a process for every event.
+
+JSONL event fields, raw phase identifiers, epoch timestamps and commands/*.argv.json, stdout, stderr and result.json files retain their formats and complete records. Display throttling never drops persistent progress records. Terminal messages go to stderr. Final and status results are human-readable on a terminal; --json forces JSON, and redirected/piped stdout automatically remains JSON. status can read both old and new job directories and reports saved state, not live VM status.

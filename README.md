@@ -88,12 +88,20 @@ Sequence:
 4. Clone the frozen base using `vmkfstools -i ... -d thin`. Transfer it with `qemu-img convert -n`, perform a full `qemu-img compare`, and record local SHA-256 hashes. Remove only the verified temporary clone. The source VM remains running during this stage.
 5. After cutover confirmation, request graceful shutdown with `vim-cmd vmsvc/power.shutdown VMID` and poll its power state. No forced power-off or reset is used.
 6. Validate the final snapshot descriptor's parent/CID chain. Use `qemu-img map` to select logical ranges containing data or explicit zeros in the top layer.
-7. Export the decoded chain through `qemu-nbd --read-only`. The Rust NBD client reads those logical ranges and writes to the same guest offsets on the target. Each 64MiB batch is fsynced and read back for SHA-256 verification. The separate verification journal is also synced.
+7. Export the decoded chain through `qemu-nbd --read-only`. The Rust NBD client asynchronously reads those logical ranges and writes to the same guest offsets on the target. Batches of at most 64MiB are fsynced and read back for SHA-256 verification. The separate verification journal is also synced.
 8. Attach the disks and verify again that the source is powered off. With `--start`, boot the target and check service readiness.
 
 The final delta stage does not scan the whole disk. Consistency relies on the initial full comparison, ordered parent/CID links, and verified readback of applied deltas. This is not an independent full-disk comparison at final cutover. Correct application shutdown is also necessary.
 
 `--iterations 0` disables online delta rounds. The default six rounds take additional snapshots while the source runs, applying each newly frozen previous layer in order. Cutover begins once an iteration is below the default 64MiB convergence threshold. Without convergence, the final delta can be large.
+
+## Delta transfer engine
+
+Source reads, target writes and durable verification overlap in a bounded pipeline. The balanced I/O controller adjusts outstanding source requests according to observed latency and pressure. Defaults are chunks of at most 4 MiB, initial depth 2, maximum depth 16 and a 128 MiB data buffer budget.
+
+Use options such as `--io-max-depth 8 --io-memory-mib 64` to set explicit limits. Readback after persistence uses `O_DIRECT` by default, with support checked before transfer. Explicit `--verify-read buffered` permits page-cache readback and records a warning. A checksum mismatch retransfers only the affected chunk once; its reread source hash must match the original. A second mismatch, device error or sync failure stops the operation.
+
+Workflow, control limits, failure behavior and metric files: [Transfer engine](docs/architecture.md).
 
 ## Other migration methods
 
@@ -201,3 +209,19 @@ After publication, install with `cargo install esxi2pve --locked`. For a static 
 ## License
 
 Licensed under GNU GPL version 3 or any later version (`GPL-3.0-or-later`). See [LICENSE](LICENSE).
+
+## Job names and terminal output
+
+Job directories use a UTC start time and VM IDs, for example:
+
+```text
+/var/lib/esxi2pve/2026-10-24T103000.123456789Z_esxi-72_pve-108281_p3832933/
+```
+
+The date/time is UTC (Z), followed by the source ESXi VMID and target PVE VMID. Names are independent of the selected language. Nine-digit nanoseconds and the process ID (PID) are always present; the format is fixed. Directories are allocated exclusively; an existing name is an error. Existing jobs are not renamed or overwritten. The event log uses the same job name with a .jsonl suffix. The source host and all job metadata remain available in state.json.
+
+Terminal messages use the PVE node's local time with a UTC offset, localized phase/level labels, concise command descriptions and elapsed command durations. Progress percentages are shown at most once every two seconds, plus the first and last record. --verbose shows full command arguments, command result paths and every progress event.
+
+GNU date from Debian coreutils resolves the system timezone or TZ; the offset is cached for the current minute. If date is unavailable or fails, terminal timestamps explicitly fall back to UTC (Z). Formatting does not invoke a process for every event.
+
+JSONL event fields, raw phase identifiers, epoch timestamps and commands/*.argv.json, stdout, stderr and result.json files retain their formats and complete records. Display throttling never drops persistent progress records. Terminal messages go to stderr. Final and status results are human-readable on a terminal; --json forces JSON, and redirected/piped stdout automatically remains JSON. status can read both old and new job directories and reports saved state, not live VM status.

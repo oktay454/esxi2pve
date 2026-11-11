@@ -3,12 +3,12 @@ use crate::{
 	Error, Result, ensure,
 	json::{self, Value},
 	process::{read_text, write_private},
-	sha256::{self, Sha256},
+	sha256::Sha256,
 };
 use std::{
-	fs::{File, OpenOptions},
+	fs::File,
 	io::{BufRead, BufReader, Read, Seek, SeekFrom, Write},
-	os::unix::{fs::FileExt, net::UnixStream},
+	os::unix::net::UnixStream,
 	path::Path,
 	time::{Duration, Instant},
 };
@@ -81,7 +81,7 @@ pub fn validate_ranges(ranges: &[Range], size: u64) -> Result<()> {
 }
 /// Sabit yeni biçim (fixed-newstyle), basit READ yanıtları. Yazma komutu içermez.
 pub struct NbdReader {
-	stream: UnixStream,
+	pub(crate) stream: UnixStream,
 	pub size: u64,
 	handle: u64,
 }
@@ -171,66 +171,18 @@ pub fn logical_copy(
 	size: u64,
 	journal: &Path,
 ) -> Result<u64> {
-	validate_ranges(ranges, size)?;
-	target_size(target, size)?;
-	let mut reader = NbdReader::connect(socket)?;
-	ensure(reader.size == size, tr!("NBD kapasitesi değişti"))?;
-	let file = OpenOptions::new().read(true).write(true).open(target)?;
-	use std::os::unix::fs::OpenOptionsExt;
-	let mut journal = OpenOptions::new()
-		.create(true)
-		.append(true)
-		.mode(0o600)
-		.open(journal)?;
-	let mut pending: Vec<(u64, usize, String)> = Vec::new();
-	let mut batch_bytes = 0;
-	let mut total = 0;
-	fn verify(
-		file: &File,
-		journal: &mut File,
-		batch: &mut Vec<(u64, usize, String)>,
-	) -> Result<()> {
-		file.sync_all()?;
-		for (offset, length, hash) in batch.drain(..) {
-			let mut data = vec![0; length];
-			file.read_exact_at(&mut data, offset)?;
-			ensure(
-				sha256::digest(&data) == hash,
-				tr!("fsync sonrası disk geri okuma doğrulaması başarısız"),
-			)?;
-			writeln!(
-				journal,
-				"{}",
-				json::object([
-					("offset", json::number(offset)),
-					("length", json::number(length as u64)),
-					("sha256", json::text(hash))
-				])
-				.encode()
-			)?;
-		}
-		journal.sync_all()?;
-		Ok(())
-	}
-	for r in ranges {
-		let end = r.start + r.length;
-		let mut offset = r.start;
-		while offset < end {
-			let data = reader.read(offset, (end - offset).min(4 * 1024 * 1024) as usize)?;
-			file.write_all_at(&data, offset)?;
-			pending.push((offset, data.len(), sha256::digest(&data)));
-			offset += data.len() as u64;
-			total += data.len() as u64;
-			batch_bytes += data.len();
-			if batch_bytes >= 64 * 1024 * 1024 {
-				verify(&file, &mut journal, &mut pending)?;
-				batch_bytes = 0;
-			}
-		}
-	}
-	verify(&file, &mut journal, &mut pending)?;
-	Ok(total)
+	crate::transfer::copy(
+		socket,
+		target,
+		ranges,
+		size,
+		journal,
+		&crate::transfer::TransferOptions::default(),
+		|_| Ok(()),
+	)
+	.map(|report| report.verified_bytes)
 }
+
 pub fn checksums(path: &Path, size: u64, block: u64) -> Result<Vec<String>> {
 	checksums_with_progress(path, size, block, |_, _| Ok(()))
 }

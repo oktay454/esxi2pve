@@ -26,7 +26,7 @@ Yardım, hatalar, onaylar, açıklayıcı günlük ve kurtarma metni çevrilir. 
 
 ```toml
 [dependencies]
-libesxi2pve = "0.1.2"
+libesxi2pve = "0.1.4"
 ```
 
 ```rust,no_run
@@ -76,7 +76,8 @@ Bu ikinci parça uygulamaya özgü `my_service_is_ready` işlevini gösteren şe
 | `transport` | SSHFS yerel seçenekleri ve FUSE kaçışları |
 | `process` | Argüman dizileriyle komut yürütme, kalıcı stdout/stderr, zaman aşımı |
 | `vmware` | VMX/VMDK ayrıştırma, CID zinciri, PVE/ESXi metaverisi |
-| `disk` | Salt okunur NBD istemcisi, mantıksal fark, QMP, geri okuma |
+| `transfer` | Eşzamansız NBD boru hattı, dengeli G/Ç, fsync, doğrudan geri okuma ve kontrollü tekrar |
+| `disk` | NBD/QMP yardımcıları, mantıksal bölge doğrulaması ve kopyalama uyumluluk girişi |
 | `json` | QEMU/QMP JSON ayrıştırma ve kodlama |
 | `sha256` | Akışlı SHA-256; disk tutarlılığı karşılaştırması |
 
@@ -95,6 +96,18 @@ Sınamalar `sshfs`, `qemu-img`, `qemu-nbd`, `qemu-io`, `sha256sum` ve Debian'ın
 
 İşletim adımları, örnekler ve sınırlar için CLI'nin [Türkçe benioku](https://github.com/oktay454/esxi2pve/blob/main/README.tr.md) veya [İngilizce benioku](https://github.com/oktay454/esxi2pve/blob/main/README.md) belgesini okuyun. Üretim kullanımından önce kullanılan ESXi/PVE yapılandırmasında aktarım uyumluluğunu ve uygulama sağlık denetimlerini doğrulayın.
 
+Türkiye sınamaları, `i/İ` ve `ı/I` karakterlerini, birleşik Unicode yazımlarını, JSON/VMX/dosya yollarını ve ASCII protokol kimliklerini kapsar. CLI sınamaları `C`, `en_US.UTF-8` ve `tr_TR.UTF-8` altında çocuk süreçlerle çalışır; süreç genelinin ortam değişkenleri değiştirilmez. SSHFS ayrıştırıcısını çalıştıran iki sınama, gerçek bağlantı kurmasa da FUSE aygıtına erişim gerektirebilir.
+
+## Fark aktarım ayarları
+
+`Config.transfer` alanı `TransferOptions` taşır. `max_depth` 1..64 (varsayılan 16), `memory_bytes` 16..1024 MiB (varsayılan 128 MiB), `verification` varsayılan `Verification::Direct` ve `read_timeout` varsayılan 120 saniyedir. `transfer::copy` donmuş kaynağın ayrık bölgelerini uygular ve `TransferReport` döndürür; `disk::logical_copy` varsayılan ayarlarla uyumluluk girişidir. Çağıran taraf kaynak neslini ve tek yazıcı sahipliğini sağlamalıdır.
+
+Akış ve kayıt güvenceleri: [Aktarım motoru](https://github.com/oktay454/esxi2pve/blob/main/docs/architecture.tr.md).
+
 ## Lisans
 
 GNU GPL sürüm 3 veya daha yeni bir sürüm (`GPL-3.0-or-later`). Tam metin: [LICENSE](LICENSE).
+
+## Terminal sunumu
+
+Config.verbose terminalde tam komut ayrıntılarını açar; kalıcı günlükler bu ayardan bağımsız olarak eksiksiz tutulur. presentation modülü aşama adlarını çevirir ve insan okunur durum özetleri üretir. Her iş kimliği aynı biçimi kullanır: dokuz basamaklı nanosaniye içeren UTC zamanı, kaynak/hedef VMID ve PID. Sunum, aktarım akışını, snapshot saklama veya doğrulama politikasını değiştirmez.

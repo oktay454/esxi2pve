@@ -88,12 +88,20 @@ Akış:
 4. Donmuş ana disk `vmkfstools -i ... -d thin` ile klonlanır. `qemu-img convert -n` ile hedefe aktarılır; `qemu-img compare` ve yerel SHA-256 kayıtları alınır. Doğrulanmış geçici klon kaldırılır. Kaynak VM bu sırada çalışır.
 5. Geçiş onayından sonra `vim-cmd vmsvc/power.shutdown VMID` ile düzenli kapanış istenir. Güç durumu sorgulanır. Zorla kapatma/reset yoktur.
 6. Son snapshot descriptor'ının parent/CID zinciri doğrulanır. `qemu-img map` ile yalnızca üst katmanın veri veya sıfır içeren mantıksal bölgeleri seçilir.
-7. `qemu-nbd --read-only` çözümlediği zinciri sunar. Rust NBD istemcisi bu mantıksal bölgeleri okuyup hedefte aynı mantıksal konumlara yazar. Her 64MiB grupta `fsync` ve SHA-256 ile geri okuma denetimi yapılır. Ayrı doğrulama günlüğü diske eşitlenir.
+7. `qemu-nbd --read-only` çözümlediği zinciri sunar. Rust NBD istemcisi bu mantıksal bölgeleri eşzamansız okuyup hedefte aynı mantıksal konumlara yazar. En fazla 64MiB gruplarda `fsync` ve SHA-256 ile geri okuma denetimi yapılır. Ayrı doğrulama günlüğü diske eşitlenir.
 8. Diskler bağlanır; kaynak kapalı olduğu yeniden doğrulanır. `--start` varsa hedef açılır ve hizmet denetlenir.
 
 Son fark aşamasında bütün disk taranmaz. Veri tutarlılığı, ilk tam karşılaştırma + sıralı parent/CID zinciri + uygulanmış farkların geri okunmasına dayanır; son aşamada bağımsız tam disk karşılaştırması yapılmış sayılmaz. Uygulamanın düzenli kapanışının doğruluğu da gereklidir.
 
 `--iterations 0` ön fark turunu kapatır. Varsayılan 6 tur, kaynak çalışırken ek snapshotlar alıp donmuş önceki katmanı sırasıyla uygular; tur farkı varsayılan 64MiB eşiğinin altına inince son geçişe gider. Yakınsama sağlanmazsa son fark büyük olabilir.
+
+## Fark aktarım motoru
+
+Kaynak okuma, hedef yazma ve kalıcı doğrulama sınırlı bir boru hattında (pipeline) örtüşür. Dengeli G/Ç denetleyicisi gözlenen gecikme ve baskıya göre bekleyen kaynak isteklerini artırıp azaltır. Varsayılan okuma parçası en fazla 4 MiB, başlangıç derinliği 2, üst sınır 16 ve veri tamponu bütçesi 128 MiB'dir.
+
+`--io-max-depth 8 --io-memory-mib 64` gibi açık sınırlar verilebilir. Kalıcılaştırmadan sonra geri okuma varsayılan olarak `O_DIRECT` kullanır; destek aktarım öncesinde sınanır. `--verify-read buffered` açık seçimi sayfa önbelleğinden doğrulamaya izin verir ve uyarı yazar. Özet uyuşmazlığında yalnızca ilgili parça bir kez yeniden aktarılır; kaynak yeniden okuması ilk özetle aynı olmalıdır. İkinci uyuşmazlık, aygıt veya eşitleme hatası işlemi durdurur.
+
+Akış, denetim sınırları, hata davranışı ve ölçüm dosyaları: [Aktarım motoru](docs/architecture.tr.md).
 
 ## Diğer yöntemler
 
@@ -201,3 +209,19 @@ Yayımlandıktan sonra `cargo install esxi2pve --locked` ile kurulabilir. Sabit 
 ## Lisans
 
 GNU GPL sürüm 3 veya daha yeni bir sürüm (`GPL-3.0-or-later`) ile lisanslanmıştır. Tam metin: [LICENSE](LICENSE).
+
+## İş adları ve terminal çıktısı
+
+İş dizinleri UTC başlangıç zamanı ve VM kimlikleriyle adlandırılır. Örnek:
+
+```text
+/var/lib/esxi2pve/2026-10-24T103000.123456789Z_esxi-72_pve-108281_p3832933/
+```
+
+Tarih-saat UTC'dir (Z); ardından kaynak ESXi VMID ve hedef PVE VMID gelir. Ad seçilen dilden bağımsızdır. Dokuz basamaklı nanosaniye ve süreç kimliği (PID) her adda bulunur; biçim sabittir. Dizinler atomik olarak ayrılır; aynı ad varsa hata verilir. Eski işler yeniden adlandırılmaz veya üzerlerine yazılmaz. Olay günlüğü aynı iş adı ve .jsonl uzantısını kullanır. Kaynak sunucu ve diğer iş bilgileri state.json içinde bulunur.
+
+Terminal iletileri PVE düğümünün yerel saatini UTC ofsetiyle, çevrilmiş aşama/seviye adlarını, kısa komut açıklamalarını ve geçen komut süresini gösterir. İlerleme yüzdesi ilk ve son kayıtta, arada en sık iki saniyede bir gösterilir. --verbose tam komut argümanlarını, sonuç dosyası yollarını ve her ilerleme olayını gösterir.
+
+Debian coreutils içindeki GNU date, sistem saat dilimini veya TZ değerini çözümler; UTC ofseti bulunduğu dakika için önbelleğe alınır. date yoksa veya başarısızsa terminal saatleri açıkça UTC'ye (Z) döner. Her olay için ayrı süreç başlatılmaz.
+
+JSONL olay alanları, ham aşama kimlikleri, epoch zamanları ve commands/*.argv.json, stdout, stderr, result.json dosyaları biçimlerini ve tüm kayıtları korur. Ekran ilerlemesini seyrekleştirmek kalıcı günlükten kayıt eksiltmez. Terminal iletileri stderr'e yazılır. Sonuç ve status çıktısı terminalde insan okunurdur; --json JSON'u zorlar, stdout dosyaya/boruya yönlendirilince otomatik JSON kalır. status eski ve yeni iş dizinlerini okuyabilir; canlı VM durumu yerine kayıtlı durumu gösterir.

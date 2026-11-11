@@ -27,6 +27,9 @@ migrate: perform migration. Prompts at startup and cutover; --yes accepts both.
   --known-hosts FILE        Previously verified SSH host keys
   --shutdown-timeout SEC    Graceful shutdown timeout (600); no forced power-off
   --command-timeout SEC     Timeout per external command (86400)
+  --io-max-depth N          Adaptive source read depth ceiling, 1..64 (16)
+  --io-memory-mib N         Data buffer budget in MiB, 16..1024 (128)
+  --verify-read direct|buffered  Delta readback mode (direct); buffered warns
   --iterations COUNT        Snapshot precopy iterations (6); 0: base + final delta
   --delta-engine qemu|clone qemu: logical deltas; clone: full clone and hash scan
   --convergence-mib COUNT   Snapshot iteration convergence threshold (64)
@@ -36,6 +39,8 @@ migrate: perform migration. Prompts at startup and cutover; --yes accepts both.
   --log-root DIRECTORY      /var/log/esxi2pve
   --state-root DIRECTORY    /var/lib/esxi2pve
   --run-root DIRECTORY      /run/esxi2pve; use a short local path
+  --verbose                 Show full command details and every progress record
+  --json                    Write the final/status result as JSON (automatic when redirected)
   --help                    Show this help
   --version                 Show version
 
