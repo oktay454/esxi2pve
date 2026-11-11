@@ -206,6 +206,10 @@ Yayımlama için crates.io hesabı, kimlik doğrulaması ve paket adlarının sa
 
 Yayımlandıktan sonra `cargo install esxi2pve --locked` ile kurulabilir. Sabit bağlı amd64 GNU derlemesi için `RUSTFLAGS="-C target-feature=+crt-static" cargo install esxi2pve --locked --target x86_64-unknown-linux-gnu` kullanın; Cargo kurulumu bu deponun `.cargo/config.toml` dosyasını devralmaz. Harici PVE/SSH/QEMU araçları yine gereklidir.
 
+## Geliştirme yönergeleri
+
+Yapay zekâ ile geliştirme için depo kökündeki [AGENTS.md](AGENTS.md) ortak kılavuzdur. AGENTS.md desteği olan araçlar, çalışma konumuna göre [kütüphane](crates/libesxi2pve/AGENTS.md) ve [CLI](crates/esxi2pve/AGENTS.md) yönergelerini de okuyabilir. Kılavuz mimari sınırları, kod biçimini, veri tutarlılığını, dil/çıktı uyumluluğunu ve doğrulama komutlarını tanımlar. Diğer araçlarda bu dosyaları çalışma bağlamına ekleyin.
+
 ## Lisans
 
 GNU GPL sürüm 3 veya daha yeni bir sürüm (`GPL-3.0-or-later`) ile lisanslanmıştır. Tam metin: [LICENSE](LICENSE).

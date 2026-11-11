@@ -206,6 +206,10 @@ Publishing requires a crates.io account, authentication and ownership of the pac
 
 After publication, install with `cargo install esxi2pve --locked`. For a static amd64 GNU build, use `RUSTFLAGS="-C target-feature=+crt-static" cargo install esxi2pve --locked --target x86_64-unknown-linux-gnu`; Cargo installation does not inherit this repository's `.cargo/config.toml`. External PVE/SSH/QEMU tools remain required.
 
+## Development guidance
+
+[AGENTS.md](AGENTS.md) is the shared guide for AI-assisted development. Tools supporting AGENTS.md can also load the scoped [library](crates/libesxi2pve/AGENTS.md) and [CLI](crates/esxi2pve/AGENTS.md) instructions according to the working location. The guide defines architecture boundaries, code style, data consistency, language/output compatibility and verification commands. With other tools, include these files in the working context.
+
 ## License
 
 Licensed under GNU GPL version 3 or any later version (`GPL-3.0-or-later`). See [LICENSE](LICENSE).
